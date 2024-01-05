@@ -4,8 +4,8 @@ import os
 from perspective import lookat, perspective
 
 #CAMERA
-position = np.array([0., 0., 0.])
-lookingAt = np.array([1., 1., 1.])
+position = np.array([0.7, 1.62, 0.7])
+lookingAt = position + np.array([1., 1., 1.])
 up = np.array([0., -1., 0.])
 fov = 40 * 1.232
 near = 0.5
@@ -17,14 +17,15 @@ ambient = 0.5
 light_color = np.array([1., 1., 1.])
 
 #QUALITY SETTINGS
-far = 140             #far plane
+far = 240             #far plane
 texN = 16             #texture resolution
 maxAlphaOverlap = 10  #pixels
-minVisibility = 0.01  #percentage
-maxVariance = 2       #standard deviation
+minVisibility = 0.1   #percentage
+maxVariance = 0.15    #standard deviation
 
-input_file = "target1.png"
+input_file = "target2.png"
 texture_folder = "blocks/"
+output_file = "kafka"
 
 cube_corners = np.array([
     [0, 0, 0],
@@ -133,7 +134,7 @@ def matchVoxel(img, projected_faces, visible_mask):
 
     # Calculate average color
     average_color = np.sum(maskedT * areas, axis=(1,2,3)) / (tex_area * total_area * visibility)
-    average_color = np.round(average_color).astype(np.uint8)
+    #average_color = np.round(average_color).astype(np.uint8)
 
     # Update visible mask
     for face in projected_faces:
@@ -278,12 +279,13 @@ for vertex in vertices:
 
 voxels.reverse()
 renderResult(voxels, output, textures)
-voxels = matchTextures(voxels, textures)
+#voxels = matchTextures(voxels, textures)
 
 #save voxels
-with open("voxels.txt", "w") as f:
+with open(output_file + ".txt", "w") as f:
     for voxel in voxels:
-        f.write(str(voxel[0][0]) + " " + str(voxel[0][1]) + " " + str(voxel[0][2]) + " " + str(voxel[1]) + "\n")
+        f.write(str(voxel[0][0]) + " " + str(voxel[0][1]) + " " + str(voxel[0][2]) + 
+                " " + str(voxel[1][0]) + " " + str(voxel[1][1]) + " " + str(voxel[1][2]) + "\n")
 
 output[:, :, 3] = (1-visible_mask) * 255
 cv.imwrite("output.png", output)
