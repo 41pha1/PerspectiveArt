@@ -1,148 +1,178 @@
-# -----------------------------------------------------------------------------
-# Copyright (c) 2009-2016 Nicolas P. Rougier. All rights reserved.
-# Distributed under the (new) BSD License.
-# -----------------------------------------------------------------------------
-
 import numpy as np
 import cv2 as cv
+import pandas as pd
+import pstats
 from glumpy import app, gl, glm, gloo
 
-def cube():
-    vtype = [('a_position', np.float32, 3), ('a_texcoord', np.float32, 2),
-             ('a_normal',   np.float32, 3), ('a_color',    np.float32, 4)]
-    itype = np.uint32
+# CAMERA SETTINGS
+fov = 65.
+camPos = 0.7, 1.62, 0.7
+pitch = np.arcsin(1 / np.sqrt(3)) * 180 / np.pi
+yaw = 45.
 
-    # Vertices positions
-    p = np.array([[1, 1, 1], [-1, 1, 1], [-1, -1, 1], [1, -1, 1],
-                  [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, -1]], dtype=float)
-    # Face Normals
-    n = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0],
-                  [-1, 0, 1], [0, -1, 0], [0, 0, -1]])
-    # Vertice colors
-    c = np.array([[0, 1, 1, 1], [0, 0, 1, 1], [0, 0, 0, 1], [0, 1, 0, 1],
-                  [1, 1, 0, 1], [1, 1, 1, 1], [1, 0, 1, 1], [1, 0, 0, 1]])
-    # Texture coords
-    t = np.array([[0, 0], [0, 1], [1, 1], [1, 0]])
+# QUALITY SETTINGS
+texN = 1000
+minDepth = 50.
+maxDepth = 400.
+minVisibility = 0.5
+maxVariance = 350
+depthStep = 0.75
 
-    faces_p = [0, 1, 2, 3,  0, 3, 4, 5,   0, 5, 6, 1,
-               1, 6, 7, 2,  7, 4, 3, 2,   4, 7, 6, 5]
-    faces_c = [0, 1, 2, 3,  0, 3, 4, 5,   0, 5, 6, 1,
-               1, 6, 7, 2,  7, 4, 3, 2,   4, 7, 6, 5]
-    faces_n = [0, 0, 0, 0,  1, 1, 1, 1,   2, 2, 2, 2,
-               3, 3, 3, 3,  4, 4, 4, 4,   5, 5, 5, 5]
-    faces_t = [0, 1, 2, 3,  0, 1, 2, 3,   0, 1, 2, 3,
-               3, 2, 1, 0,  0, 1, 2, 3,   0, 1, 2, 3]
+# INPUT/OUTPUT SETTINGS
+input_file = "target.webp"
+output_file = "blocks.txt"
 
-    vertices = np.zeros(24, vtype)
-    vertices['a_position'] = p[faces_p]
-    vertices['a_normal']   = n[faces_n]
-    vertices['a_color']    = c[faces_c]
-    vertices['a_texcoord'] = t[faces_t]
+vertex = '''
+    attribute vec2 position;
+    varying vec2 v_texcoord;
 
-    filled = np.resize(
-       np.array([0, 1, 2, 0, 2, 3], dtype=itype), 6 * (2 * 3))
-    filled += np.repeat(4 * np.arange(6, dtype=itype), 6)
+    void main (void)
+    {
+        v_texcoord = position;
+        gl_Position = vec4(position, 0.0, 1.0);
+    } '''
+fragment = open("src/fragment.glsl").read()
 
-    outline = np.resize(
-        np.array([0, 1, 1, 2, 2, 3, 3, 0], dtype=itype), 6 * (2 * 4))
-    outline += np.repeat(4 * np.arange(6, dtype=itype), 8)
-
-    vertices = vertices.view(gloo.VertexBuffer)
-    filled   = filled.view(gloo.IndexBuffer)
-    outline  = outline.view(gloo.IndexBuffer)
-
-    return vertices, filled, outline
-
-
-def checkerboard(grid_num=8, grid_size=32):
-    """ Checkerboard pattern """
-    
-    row_even = grid_num // 2 * [0, 1]
-    row_odd = grid_num // 2 * [1, 0]
-    Z = np.row_stack(grid_num // 2 * (row_even, row_odd)).astype(np.uint8)
-    return 255 * Z.repeat(grid_size, axis=0).repeat(grid_size, axis=1)
-
-
-vertex = """
-uniform mat4   u_model;         // Model matrix
-uniform mat4   u_view;          // View matrix
-uniform mat4   u_projection;    // Projection matrix
-attribute vec4 a_color;         // Vertex color
-attribute vec3 a_position;      // Vertex position
-attribute vec2 a_texcoord;      // Vertex texture coordinates
-varying vec4   v_color;         // Interpolated fragment color (out)
-varying vec2   v_texcoord;      // Interpolated fragment texture coordinates (out)
-
-void main()
-{
-    // Assign varying variables
-    v_color     = a_color;      
-    v_texcoord  = a_texcoord;
-
-    // Final position
-    gl_Position = u_projection * u_view * u_model * vec4(a_position,1.0);
-}
-"""
-
-fragment = """
-uniform vec4      u_color;    // Global color
-uniform sampler2D u_texture;  // Texture 
-varying vec4      v_color;    // Interpolated fragment color (in)
-varying vec2      v_texcoord; // Interpolated fragment texture coordinates (in)
-void main()
-{
-    // Get texture color
-    vec4 t_color = vec4(vec3(texture2D(u_texture, v_texcoord).r), 1.0);
-
-    // Final color
-    gl_FragColor = u_color * t_color * mix(v_color, t_color, 0.25);
-}
-"""
-
-window = app.Window(width=1024, height=1024,
-                    color=(0.30, 0.30, 0.35, 1.00))
-window.hide()
-
-def draw(dt):
-    global phi, theta, duration
-    window.clear()
-
-    # Filled cube
-    gl.glDisable(gl.GL_BLEND)
-    gl.glEnable(gl.GL_DEPTH_TEST)
-    gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
-    cube['u_color'] = 1, 1, 1, 1
-    cube.draw(gl.GL_TRIANGLES, I)
-
-
-def setup():
-    global V,I,O,cube,texture,depth,framebuffer
-    
-    gl.glEnable(gl.GL_DEPTH_TEST)
-    gl.glPolygonOffset(1, 1)
-    gl.glEnable(gl.GL_LINE_SMOOTH)
-
-    V,I,O = cube()
-    cube = gloo.Program(vertex, fragment)
-    cube.bind(V)
-
-    cube['u_projection'] = glm.perspective(45.0, 1024 / float(1024), 2.0, 100.0)
-    cube['u_texture'] = checkerboard()
-    cube['u_model'] = np.eye(4, dtype=np.float32)
-    cube['u_view'] = glm.translation(0, 0, -5)
-    phi, theta = 40, 30
-    model = np.eye(4, dtype=np.float32)
-    glm.rotate(model, theta, 0, 0, 1)
-    glm.rotate(model, phi, 0, 1, 0)
-    cube['u_model'] = model
-
-    texture = np.zeros((1024,1024,4),np.float32).view(gloo.TextureFloat2D)
-    depth = np.ones((1024,1024),np.float32).view(gloo.DepthTexture)
-    framebuffer = gloo.FrameBuffer(color=[texture], depth=depth)
+def getResult(depth):
+    quad['u_depth'] = depth
 
     framebuffer.activate()
-    draw(10)
+    quad.draw(gl.GL_TRIANGLE_STRIP)
     result = framebuffer.color[0].get()
     framebuffer.deactivate()
 
-    cv.imwrite("screenshot.png", result[:,:,:3] * 255)
+    return result
+
+def placeBlocks(texture, target, occlusionMask, output, depth):
+    allowedVariance = maxVariance * ((depth-minDepth) / (maxDepth - minDepth)) ** 1.
+
+    placed = {}
+
+    indices = np.array(np.where((occlusionMask < 0.5) & (texture[:,:,3] > 0.01))).T
+    
+    if len(indices) == 0:
+        return placed
+    
+    blockCoords = np.array(texture[indices[:,0], indices[:,1], :3], dtype=np.int32)
+    
+    #put indices and blockCoords into a 3d dataframe
+    df_rays = pd.DataFrame()
+    df_rays['x'] = blockCoords[:,0]
+    df_rays['y'] = blockCoords[:,1]
+    df_rays['z'] = blockCoords[:,2]
+    df_rays['tx'] = indices[:,0]
+    df_rays['ty'] = indices[:,1]
+
+    rays = df_rays.groupby(['x', 'y', 'z']).apply(lambda x: np.array(x[['tx', 'ty']].values)).reset_index()
+    
+    #iterate over each block
+    for x,y, z, texels in rays.itertuples(index=False):
+        texels = np.array(texels)
+        pixels = target[texels[:,0], texels[:,1], :3]
+
+        meanColor = np.mean(pixels, axis=0)
+        dif = pixels - meanColor
+        varR = np.dot(dif[:,0], dif[:,0]) / len(dif)
+        varG = np.dot(dif[:,1], dif[:,1]) / len(dif)
+        varB = np.dot(dif[:,2], dif[:,2]) / len(dif)
+        variance = max(varR, varG, varB)
+
+        if variance > allowedVariance:
+            continue
+        
+        placed[(x,y,z)] = meanColor
+        occlusionMask[texels[:,0], texels[:,1]] = 1.0
+
+        #Visualize
+        output[texels[:,0], texels[:,1]] = meanColor * texture[texels[:,0], texels[:,1], 3][:,None]
+
+    return placed
+
+
+def addAlignmentBlocks(placed):
+    placed[(0,-1,0)] = np.array([255, 255, 255])
+    placed[(0,0,1)] = np.array([255, 255, 255])
+    placed[(1,0,0)] = np.array([255, 255, 255])
+
+def setup(w, h, target_image):
+    global quad, texture, framebuffer
+
+    window = app.Window(width=w, height=h)
+    window.hide()
+
+    quad = gloo.Program(vertex, fragment, count=4)
+    quad['position'] = [(-1,-1), (-1,+1), (+1,-1), (+1,+1)] 
+    quad['u_aspect'] = w / h    
+    quad['u_depthStep'] = depthStep
+    quad['u_camPos'] = camPos
+    quad['u_pitch'] = pitch
+    quad['u_yaw'] = yaw
+    quad['u_fov'] = fov
+    quad['u_alphaMask'] = target_image
+
+    quad['u_projection'] = glm.perspective(fov, w / h, 0.1, 1000.0)
+    forward = np.array([
+        np.cos(np.radians(pitch)) * np.sin(np.radians(yaw)),
+        np.sin(np.radians(pitch)),
+        np.cos(np.radians(pitch)) * np.cos(np.radians(yaw))
+    ])
+    quad['u_view'] = glm.lookAt(camPos, camPos + forward)
+
+    texture = np.zeros((h,w,4),np.float32).view(gloo.TextureFloat2D)
+    framebuffer = gloo.FrameBuffer(color=[texture])
+
+def main():
+    target_image = cv.imread(input_file, cv.IMREAD_UNCHANGED)
+
+    if target_image.shape[2] == 3:
+        target_image = cv.cvtColor(target_image, cv.COLOR_BGR2BGRA)
+    h, w = target_image.shape[:2]
+
+    target_image = cv.resize(target_image, (texN, int(texN * h / w)), interpolation=cv.INTER_AREA)
+    h, w = target_image.shape[:2]
+    output_image = np.zeros((h, w, 3), dtype=np.uint8)
+
+    occlusionMask = np.zeros((h,w),np.float32)
+    output = np.zeros((h,w,3),np.float32)
+
+    setup(w, h, target_image)
+
+    # result = getResult(100.) * 255.
+    # result[:,:,:3] = target_image[:,:,:3]
+    # cv.imwrite("screenshot.png", result)
+
+    depth = minDepth
+    placed = {}
+    while depth < maxDepth:
+        result = getResult(depth)
+        newPlaced = placeBlocks(result, target_image, occlusionMask, output, depth)
+        placed.update(newPlaced)
+
+        print("Depth", depth, " Placed", len(newPlaced), " Total", len(placed))
+        depth += 0.41234
+        
+        #Visualize
+        screenshot = np.concatenate((output, occlusionMask[:,:,None] * 255), axis=2)
+        cv.imwrite("screenshot.png", screenshot)
+
+    addAlignmentBlocks(placed)
+    # save result
+    with open(output_file, 'wb') as f:
+        for block, color in placed.items():
+            line = str(block[0]) + " " + str(block[1]) + " " + str(block[2]) + " " + str(color[0]) + " " + str(color[1]) + " " + str(color[2]) + "\n"
+            f.write(line.encode('utf-8'))
+
+if __name__ == '__main__':
+    main()
+
+# TODO:
+# - Faster rendering
+# - Check missing blocks
+# - Min visibility
+# - Minecraft lighting
+# - Dynamic render resolution
+# - 3d Dithering?
+    
+# FUTURE:
+# - Perspective Art Website
+# - Advertisment on reddit and youtube

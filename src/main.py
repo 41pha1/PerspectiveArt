@@ -17,15 +17,15 @@ ambient = 0.5
 light_color = np.array([1., 1., 1.])
 
 #QUALITY SETTINGS
-far = 240             #far plane
+far = 300             #far plane
 texN = 16             #texture resolution
 maxAlphaOverlap = 10  #pixels
 minVisibility = 0.1   #percentage
-maxVariance = 0.15    #standard deviation
+maxVariance = 0.1     #standard deviation
 
-input_file = "target2.png"
+input_file = "target.jpg"
 texture_folder = "blocks/"
-output_file = "kafka"
+output_file = "train"
 
 cube_corners = np.array([
     [0, 0, 0],
@@ -245,6 +245,10 @@ print("Loading textures...")
 textures = loadTextures()
 print("Loading target image...")
 target_image = cv.imread(input_file, cv.IMREAD_UNCHANGED)
+
+#add alpha channel if not present
+if target_image.shape[2] == 3:
+    target_image = cv.cvtColor(target_image, cv.COLOR_BGR2BGRA)
 
 output = target_image.copy()
 
